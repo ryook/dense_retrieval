@@ -1,0 +1,20 @@
+[project]
+name = "dense-retrieval"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jupyter>=1.1.1",
+    "transformers>=4.45.2",
+]
+
+[tool.poetry.dependencies]
+torch = { version = "*", source = "https://download.pytorch.org/whl/cu124" }
+torchvision = { version = "*", source = "https://download.pytorch.org/whl/cu124" }
+torchaudio = { version = "*", source = "https://download.pytorch.org/whl/cu124" }
+datasets = { version = "*" }
+bitsandbytes = { version = "*" }
+accelerate = { version = "*" }
+peft = { version = "*" }
+trl = { version = "*" }
