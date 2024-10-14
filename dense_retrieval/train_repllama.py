@@ -9,7 +9,7 @@ from typing import Dict, Optional
 
 import torch
 from torch import nn, Tensor
-from transformers import PreTrainedModel, AutoModel, LlamaModel, AutoTokenizer
+from transformers import PreTrainedModel, AutoModel, LlamaModel, AutoTokenizer, BitsAndBytesConfig
 from transformers.file_utils import ModelOutput
 from peft import LoraConfig, get_peft_model, TaskType
 
@@ -126,25 +126,36 @@ class RepLLaMA(EncoderModel):
         return self.lm_q.base_model.gradient_checkpointing_enable()
 
     # いる？？
-    @staticmethod
-    def build_peft_model(peft_model_name: str):
-        config = LoraConfig.from_pretrained(peft_model_name)
-        config.inference_mode = False
-        base_model = LlamaModel.from_pretrained(config.base_model_name_or_path)
-        model = get_peft_model(base_model, config)
-        model.print_trainable_parameters()
-        return model
+    # @staticmethod
+    # def build_peft_model(peft_model_name: str):
+    #     config = LoraConfig.from_pretrained(peft_model_name)
+    #     config.inference_mode = False
+    #     base_model = LlamaModel.from_pretrained(config.base_model_name_or_path)
+    #     model = get_peft_model(base_model, config)
+    #     model.print_trainable_parameters()
+    #     return model
 
     @classmethod
     def build(cls, model_config, train_config, **hf_kwargs):
-        base_model = LlamaModel.from_pretrained(model_config.model_name_or_path, **hf_kwargs)
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_storage=torch.bfloat16,
+        )
+        base_model = LlamaModel.from_pretrained(
+            model_config.model_name_or_path, 
+            quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+        **hf_kwargs)
 
         if train_config.gradient_checkpointing:
             base_model.gradient_checkpointing_enable()
 
         if base_model.config.pad_token_id is None:
             base_model.config.pad_token_id = 0
-
 
         peft_config = LoraConfig(
             base_model_name_or_path=model_config.model_name_or_path,
@@ -162,6 +173,9 @@ class RepLLaMA(EncoderModel):
             lm_p=hf_model,
             pooler=None,  
         )
+        # LoRAのパラメータだけに requires_grad=True を設定
+        for param in model.parameters():
+            param.requires_grad = True
         return model
 
     def save(self, output_dir):
