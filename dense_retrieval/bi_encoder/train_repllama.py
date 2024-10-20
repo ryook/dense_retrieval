@@ -5,6 +5,7 @@ from datetime import datetime
 import logging
 from typing import Iterable
 
+from datasets import load_dataset
 from sentence_transformers import (
     SentenceTransformer,
     LoggingHandler,
@@ -43,7 +44,7 @@ class RepLLaMA(Transformer):
             model_name_or_path,
             cache_dir=cache_dir
         )
-        tokenizer.pad_token_id = tokenizer.unk_token_id
+        tokenizer.pad_token_id = tokenizer.eos_token_id
         tokenizer.pad_token = tokenizer.eos_token
         return tokenizer
 
@@ -68,7 +69,7 @@ class RepLLaMA(Transformer):
     def _encode(self, input_):
         if input_ is None:
             return None
-
+        
         output = self.auto_model(**input_, output_hidden_states=True)
         hidden = output.hidden_states[-1]
         attention_mask = input_["attention_mask"]
@@ -120,8 +121,11 @@ class InfoNCELoss(torch.nn.Module):
         loss = self.cross_entropy(similarity, target)
         return loss
 
-
-
+def add_suffix(example):
+    example['query'] = f'query: {example['query']}</s>'
+    example['positive'] = f'passage: {example['positive']}</s>'
+    example['negative'] = f'passage: {example['negative']}</s>'
+    return example
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -162,20 +166,14 @@ if __name__ == "__main__":
     # Load our embedding model
     logging.info("Create LLaMa model")
     word_embedding_model = RepLLaMA(model_name_or_path=model_name, max_seq_length=max_seq_length)
-    # pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension(), args.pooling)
     model = SentenceTransformer(modules=[word_embedding_model])
         
     output_dir = "output/train_repllama-{}-margin_{:.1f}-{}".format(
         model_name.replace("/", "-"), ce_score_margin, datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     )
 
-    corpus = read_corpus()
-    queries = read_queries()
-    train_queries = generate_train_queries(queries, args, ce_score_margin)
-    # For training the SentenceTransformer model, we need a dataset, a dataloader, and a loss used for training.
-    train_dataset = MSMARCODataset(train_queries, corpus=corpus)
-    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=train_batch_size)
-
+    train_dataset = load_dataset("sentence-transformers/msmarco-co-condenser-margin-mse-sym-mnrl-mean-v1", "triplet-hard", split="train").select(range(10000))
+    train_dataset = train_dataset.map(add_suffix)
     train_loss = InfoNCELoss(model=model)
 
     args = SentenceTransformerTrainingArguments(
@@ -187,9 +185,8 @@ if __name__ == "__main__":
         # per_device_eval_batch_size=train_batch_size,
         learning_rate=args.lr,
         warmup_ratio=0.1,
-        fp16=True,  # Set to False if you get an error that your GPU can't run on FP16
-        bf16=False,  # Set to True if you have a GPU that supports BF16
-        # batch_sampler=BatchSamplers.NO_DUPLICATES,  # MultipleNegativesRankingLoss benefits from no duplicate samples in a batch
+        fp16=False,  # Set to False if you get an error that your GPU can't run on FP16
+        bf16=True,  # Set to True if you have a GPU that supports BF16
         # Optional tracking/debugging parameters:
         # eval_strategy="steps",
         # eval_steps=100,
@@ -198,12 +195,23 @@ if __name__ == "__main__":
         save_total_limit=2,
         logging_steps=100,
         run_name="sentence-transformer-repllama",  # Will be used in W&B if `wandb` is installed
+        # report_to="wandb"
     )
+    # dev_evaluator = TripletEvaluator(
+    #     anchors=eval_dataset["anchor"],
+    #     positives=eval_dataset["positive"],
+    #     negatives=eval_dataset["negative"],
+    #     name="msmarco-bm25",
+    # )
+    # dev_evaluator(model)
+
     trainer = SentenceTransformerTrainer(
         model=model,
         args=args,
         train_dataset=train_dataset,
+        # eval_dataset=eval_dataset,
         loss=train_loss,
+        # evaluator=dev_evaluator,
     )
     trainer.train()
 
